@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
-from typing import Optional, Any, List, Set
+from typing import Optional, Any, List, Set, Tuple
 import io
+import openpyxl  # noqa: F401 - garante engine para pd.read_excel
 
 
 def normalize_doc(valor: Any) -> Optional[str]:
@@ -61,6 +62,95 @@ COLUMN_MAPPING: dict = {
     'SISTEMA':                 ['SISTEMA',                'SISTEMA'],
     'RBASE RAIZ':              ['RBASE RAIZ',             'RBASE RAIZ'],
 }
+
+
+# ---------------------------------------------------------------------------
+# ENCODINGS comuns para tentar em ordem
+# ---------------------------------------------------------------------------
+_ENCODINGS = ['utf-8', 'iso-8859-1', 'latin-1', 'cp1252', 'utf-8-sig']
+
+# ---------------------------------------------------------------------------
+# Colunas obrigatórias em cada arquivo (nome_arquivo -> [colunas])
+# ---------------------------------------------------------------------------
+_REQUIRED_COLUMNS = {
+    'Matera': ['sNumDocumento'],
+    'Títulos em Aberto': ['NUM DOC MATERA'],
+    'CR MAXIFROTA 2026': ['NUM DOC'],
+}
+
+
+def _detect_encoding_sep(csv_bytes: bytes, nome_arquivo: str) -> Tuple[str, pd.DataFrame]:
+    """
+    Tenta ler um CSV com diferentes combinações de encoding e separador.
+    Retorna (separador_detectado, DataFrame).
+
+    Lança ValueError com mensagem clara se nenhuma combinação funcionar.
+    """
+    erros: list = []
+
+    for enc in _ENCODINGS:
+        for sep in [';', ',']:
+            try:
+                df = pd.read_csv(
+                    io.BytesIO(csv_bytes),
+                    sep=sep,
+                    encoding=enc,
+                    on_bad_lines='skip',
+                )
+                # Se leu com mais de 1 coluna, considera sucesso
+                if len(df.columns) > 1:
+                    return sep, df
+            except Exception as e:
+                erros.append(f"  encoding={enc}, separador='{sep}': {e}")
+
+    # Tenta última chance: sniff com csv.Sniffer (ignora encoding)
+    try:
+        import csv
+        texto = csv_bytes.decode('utf-8', errors='replace')
+        dialect = csv.Sniffer().sniff(texto[:10000])
+        sep = dialect.delimiter
+        for enc in _ENCODINGS:
+            try:
+                df = pd.read_csv(io.BytesIO(csv_bytes), sep=sep, encoding=enc)
+                if len(df.columns) > 1:
+                    return sep, df
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    raise ValueError(
+        f"❌ Arquivo **{nome_arquivo}**: não foi possível ler o CSV.\n\n"
+        f"Formatos tentados (encoding × separador): {len(_ENCODINGS) * 2} combinações\n"
+        f"Verifique se o arquivo é realmente um CSV válido e não está corrompido.\n\n"
+        f"Detalhes:\n" + "\n".join(erros[-6:])
+    )
+
+
+def _validate_columns(df: pd.DataFrame, nome_arquivo: str) -> None:
+    """
+    Valida se as colunas obrigatórias existem no DataFrame.
+    Lança ValueError com mensagem clara se faltar alguma coluna.
+
+    Também faz strip nos nomes das colunas para evitar problemas de espaços.
+    """
+    df.columns = df.columns.str.strip()
+    colunas_obrigatorias = _REQUIRED_COLUMNS.get(nome_arquivo, [])
+
+    faltando = [c for c in colunas_obrigatorias if c not in df.columns]
+
+    if faltando:
+        colunas_encontradas = ', '.join(df.columns[:20].tolist())
+        if len(df.columns) > 20:
+            colunas_encontradas += f' ... (+{len(df.columns) - 20} colunas)'
+
+        raise ValueError(
+            f"❌ Arquivo **{nome_arquivo}**: coluna(s) obrigatória(s) não encontrada(s):\n"
+            f"   **{', '.join(faltando)}**\n\n"
+            f"   Colunas encontradas no arquivo:\n"
+            f"   {colunas_encontradas}\n\n"
+            f"   💡 Verifique se o arquivo enviado é o correto."
+        )
 
 
 def _safe_value(series: pd.Series, idx: int) -> Any:
@@ -284,6 +374,9 @@ def process_from_bytes(
     """
     Executa integração a partir de bytes (para Streamlit).
 
+    Faz detecção automática de encoding e separador nos CSVs.
+    Valida colunas obrigatórias com mensagens claras de erro.
+
     Args:
         matera_bytes: Conteúdo arquivo Matera em bytes
         complementar_bytes: Conteúdo arquivo Títulos em Aberto em bytes
@@ -291,20 +384,37 @@ def process_from_bytes(
 
     Returns:
         DataFrame consolidado + coluna AUXILIAR
+
+    Raises:
+        ValueError: se arquivo CSV inválido, encoding não reconhecido
+                    ou colunas obrigatórias faltando
     """
-    # Ler Matera
-    matera = pd.read_csv(io.BytesIO(matera_bytes), sep=';', encoding='iso-8859-1')
+    # --- Ler Matera (CSV) ---
+    _sep_matera, matera = _detect_encoding_sep(matera_bytes, 'Matera')
+    _validate_columns(matera, 'Matera')
     matera = matera.dropna(axis=1, how='all')
     matera['doc_normalized'] = matera['sNumDocumento'].apply(normalize_doc)
 
-    # Ler Títulos em Aberto
-    complementar = pd.read_csv(io.BytesIO(complementar_bytes), sep=';', encoding='iso-8859-1')
+    # --- Ler Títulos em Aberto (CSV) ---
+    _sep_comp, complementar = _detect_encoding_sep(
+        complementar_bytes, 'Títulos em Aberto'
+    )
+    _validate_columns(complementar, 'Títulos em Aberto')
     complementar.columns = complementar.columns.str.strip()
     complementar = complementar.dropna(axis=1, how='all')
     complementar['doc_normalized'] = complementar['NUM DOC MATERA'].apply(normalize_doc)
 
-    # Ler CR Maxifrota
-    cr_maxifrota = pd.read_excel(io.BytesIO(cr_maxifrota_bytes))
+    # --- Ler CR Maxifrota (XLSX) ---
+    try:
+        cr_maxifrota = pd.read_excel(io.BytesIO(cr_maxifrota_bytes), engine='openpyxl')
+    except Exception as e:
+        raise ValueError(
+            f"❌ Arquivo **CR MAXIFROTA 2026**: não foi possível ler o Excel.\n\n"
+            f"Erro: {e}\n\n"
+            f"💡 O arquivo deve estar no formato .xlsx (Excel 2007+). "
+            f"Verifique se não é .xls antigo ou arquivo corrompido."
+        ) from e
+    _validate_columns(cr_maxifrota, 'CR MAXIFROTA 2026')
     cr_maxifrota = cr_maxifrota.dropna(axis=1, how='all')
     cr_maxifrota['doc_normalized'] = cr_maxifrota['NUM DOC'].apply(normalize_doc)
 

@@ -92,9 +92,18 @@ def main():
                             f"{len(result_df)} registros processados."
                         )
                 
+                except ValueError as e:
+                    # Erros de validação com mensagens detalhadas do processor
+                    st.error(str(e))
                 except Exception as e:
-                    st.error(f"❌ Erro ao processar: {str(e)}")
-                    st.info("Verifique se os arquivos estão no formato correto.")
+                    st.error(
+                        f"❌ Erro inesperado ao processar os arquivos:\n\n"
+                        f"**{type(e).__name__}:** {str(e)}\n\n"
+                        f"Verifique se:\n"
+                        f"- Os arquivos CSV estão no formato válido (separador ; ou ,)\n"
+                        f"- O arquivo Excel está no formato .xlsx (não .xls)\n"
+                        f"- As colunas obrigatórias estão presentes em cada arquivo"
+                    )
         
         # Exibir resultados
         if 'result_df' in st.session_state:
