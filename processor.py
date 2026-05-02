@@ -7,10 +7,10 @@ import io
 def normalize_doc(valor: Any) -> Optional[str]:
     """
     Normaliza número de documento removendo caracteres não numéricos.
-    
+
     Args:
         valor: Valor a normalizar (pode ser string, int, float ou NaN)
-    
+
     Returns:
         String contendo apenas dígitos ou None se valor for vazio
     """
@@ -22,10 +22,10 @@ def normalize_doc(valor: Any) -> Optional[str]:
 def read_matera(filepath: str) -> pd.DataFrame:
     """
     Lê arquivo Matera (FONTE DE VERDADE).
-    
+
     Args:
         filepath: Caminho do arquivo CSV Matera
-    
+
     Returns:
         DataFrame com dados Matera normalizados
     """
@@ -37,11 +37,11 @@ def read_matera(filepath: str) -> pd.DataFrame:
 
 def read_complementar(filepath: str) -> pd.DataFrame:
     """
-    Lê arquivo complementar (segunda fonte).
-    
+    Lê arquivo Títulos em Aberto (complementar).
+
     Args:
         filepath: Caminho do arquivo CSV complementar
-    
+
     Returns:
         DataFrame com dados complementares normalizados
     """
@@ -52,24 +52,30 @@ def read_complementar(filepath: str) -> pd.DataFrame:
     return df
 
 
-def read_template(filepath: str) -> pd.DataFrame:
+def read_cr_maxifrota(filepath: str) -> pd.DataFrame:
     """
-    Lê template Excel final para obter layout obrigatório.
-    
+    Lê planilha CR MAXIFROTA 2026 (BASE DE DADOS pré-preenchida).
+
+    O CR Maxifrota contém dados reais dos títulos que foram validados
+    (existem tanto no Matera quanto nos Títulos em Aberto).
+    Sua estrutura de colunas define o layout final do resultado.
+
     Args:
-        filepath: Caminho do arquivo XLSX template
-    
+        filepath: Caminho do arquivo XLSX CR Maxifrota
+
     Returns:
-        DataFrame vazio com colunas do template
+        DataFrame com dados do CR + coluna doc_normalized
     """
     df = pd.read_excel(filepath)
-    return df.iloc[0:0].copy()
+    df = df.dropna(axis=1, how='all')
+    df['doc_normalized'] = df['NUM DOC'].apply(normalize_doc)
+    return df
 
 
 # ---------------------------------------------------------------------------
-# MAPEAMENTO: coluna do template  ->  [fonte Matera, fonte Complementar]
-# A ordem define prioridade: tenta Matera primeiro, depois Complementar.
-# Coluna vazia (= []) significa que não há mapeamento automático (REVISAR).
+# MAPEAMENTO: coluna do resultado  ->  [fonte Matera, fonte Complementar]
+# Usado APENAS para títulos que NÃO possuem match no CR Maxifrota
+# (existem só no Matera, não nos Títulos em Aberto)
 # ---------------------------------------------------------------------------
 COLUMN_MAPPING: dict = {
     'EMPRESA':                 ['sEmpresa',               'EMPRESA'],
@@ -96,13 +102,13 @@ COLUMN_MAPPING: dict = {
     'PAGA NA DATA':            ['COFINS',                 'COFINS'],
     'RISCO DE INADIMPLÊNCIA':  ['PIS',                    'PIS'],
     'CREDIT SCORE':            ['CREDIT SCORE',           'CREDIT SCORE'],
-    'SCORE CLASS':             [],                                     # sem mapeamento
-    'PROB DEFAULT (%)':        [],                                     # sem mapeamento
-    'TENDÊNCIA':               [],                                     # sem mapeamento
-    'PREVISAO DE PAGAMENTO':   [],                                     # sem mapeamento
+    'SCORE CLASS':             [],
+    'PROB DEFAULT (%)':        [],
+    'TENDÊNCIA':               [],
+    'PREVISAO DE PAGAMENTO':   [],
     'BANCO':                   ['sBanco',                 'BANCO'],
     'DATA BLOQUEIO':           ['DATA BLOQUEIO',          'DATA BLOQUEIO'],
-    'CODIGO PAGAMENTO':        [],                                     # sem mapeamento
+    'CODIGO PAGAMENTO':        [],
     'ATRASO':                  ['ATRASO',                 'ATRASO'],
     'LINK NFSE':               ['LINK NFSE',              'LINK NFSE'],
     'SISTEMA':                 ['SISTEMA',                'SISTEMA'],
@@ -110,153 +116,198 @@ COLUMN_MAPPING: dict = {
 }
 
 
-def _find_column_value(
-    merged: pd.DataFrame,
-    matera_col: Optional[str],
-    compl_col: Optional[str],
-) -> pd.Series:
+def _safe_value(series: pd.Series, idx: int) -> Any:
     """
-    Busca valor de uma coluna no DataFrame merged, respeitando prioridade
-    Matera > Complementar > REVISAR, e tratando os sufixos _M / _C
-    gerados pelo merge.
-
-    O DataFrame merged possui colunas renomeadas pelo pandas quando há
-    nomes duplicados entre as duas fontes. Exemplo:
-        - 'EXECUTIVO'  ->  'EXECUTIVO_M' (Matera)  e  'EXECUTIVO_C' (Complementar)
-        - Colunas exclusivas de uma fonte mantêm o nome original.
-
-    Estratégia de busca (por ordem de prioridade):
-      1. nome_M   (coluna vinda do Matera)
-      2. nome     (coluna sem sufixo – exclusiva do Matera ou sem conflito)
-      3. nome_C   (coluna vinda do Complementar)
+    Obtém valor seguro de uma Series, retornando None para NaN/NaT.
     """
-
-    candidates: List[str] = []
-
-    # Prioridade 1: Matera com sufixo _M
-    if matera_col:
-        candidates.append(f"{matera_col}_M")
-        # Prioridade 2: nome original (pode ser exclusivo do Matera)
-        candidates.append(matera_col)
-
-    # Prioridade 3: Complementar com sufixo _C
-    if compl_col:
-        candidates.append(f"{compl_col}_C")
-        # Prioridade 4: nome original do complementar (se diferente do Matera)
-        if compl_col != matera_col:
-            candidates.append(compl_col)
-
-    for candidate in candidates:
-        if candidate in merged.columns:
-            series = merged[candidate].copy()
-            # Converte para string e substitui NaN / NaT por None (depois REVISAR)
-            result = series.astype(str)
-            result = result.replace('nan', None)
-            result = result.replace('NaT', None)
-            result = result.replace('<NA>', None)
-            result = result.fillna('REVISAR')
-            result = result.replace('None', 'REVISAR')
-            return result
-
-    # Fallback: nenhuma coluna encontrada
-    return pd.Series(['REVISAR'] * len(merged), index=merged.index)
+    try:
+        val = series.iloc[idx] if hasattr(series, 'iloc') else series[idx]
+        if pd.isna(val):
+            return None
+        return val
+    except (IndexError, KeyError):
+        return None
 
 
-def fill_template(merged: pd.DataFrame, template: pd.DataFrame) -> pd.DataFrame:
+def _get_column_value(
+    df: pd.DataFrame,
+    col_name: str,
+    idx: int,
+) -> Any:
     """
-    Preenche template com dados consolidados respeitando regra de negócio:
-    - Prioridade: Matera > Complementar > "REVISAR"
-    - Adiciona coluna AUXILIAR sinalizando registros sem match no complementar
-    
+    Obtém valor de uma coluna específica do DataFrame pelo índice.
+    Retorna None se a coluna não existir.
+    """
+    if col_name in df.columns:
+        return _safe_value(df[col_name], idx)
+    return None
+
+
+def _fill_from_matera(
+    matera: pd.DataFrame,
+    result_columns: List[str],
+    indices: List[int],
+) -> pd.DataFrame:
+    """
+    Preenche resultado com dados do Matera para títulos que
+    NÃO possuem correspondência no CR Maxifrota.
+
     Args:
-        merged: DataFrame consolidado (resultado do merge)
-        template: DataFrame com estrutura do template
-    
+        matera: DataFrame do Matera original
+        result_columns: Lista de colunas do layout final (do CR)
+        indices: Índices das linhas do Matera a incluir
+
     Returns:
-        DataFrame preenchido com layout obrigatório + coluna AUXILIAR
+        DataFrame preenchido com dados do Matera no layout do CR
     """
-    result = pd.DataFrame(columns=template.columns)
+    rows = []
+    for idx in indices:
+        row = {}
+        for col in result_columns:
+            if col in COLUMN_MAPPING:
+                matera_src = COLUMN_MAPPING[col][0] if len(COLUMN_MAPPING[col]) > 0 else None
+                if matera_src:
+                    val = _get_column_value(matera, matera_src, idx)
+                    row[col] = val if val is not None else ''
+                else:
+                    row[col] = ''
+            else:
+                row[col] = ''
+        row['AUXILIAR'] = 'Apenas Matera - Sem correspondência nos Títulos em Aberto'
+        rows.append(row)
 
-    # Preenche cada coluna do template usando o mapeamento
-    for col_template in template.columns:
-        if col_template in COLUMN_MAPPING:
-            sources = COLUMN_MAPPING[col_template]
-            matera_src = sources[0] if len(sources) > 0 else None
-            compl_src = sources[1] if len(sources) > 1 else None
-        else:
-            matera_src = None
-            compl_src = None
-
-        result[col_template] = _find_column_value(merged, matera_src, compl_src)
-
-    # Coluna AUXILIAR: sinaliza registros sem correspondência no complementar
-    # Detecta se a coluna de documento do complementar veio vazia (NaN = sem match)
-    aux_values = []
-    for idx in merged.index:
-        row = merged.loc[idx]
-
-        # Tenta achar o campo 'NUM DOC MATERA' no merged (pode ter sufixo _C)
-        doc_compl = None
-        for candidate in ['NUM DOC MATERA_C', 'NUM DOC MATERA']:
-            if candidate in merged.columns:
-                val = row[candidate]
-                if not pd.isna(val) and str(val).strip() != '' and str(val).strip() != 'nan':
-                    doc_compl = val
-                    break
-
-        if doc_compl is not None:
-            aux_values.append('OK - Encontrado nos Títulos em Aberto')
-        else:
-            aux_values.append('REVISAR - Não encontrado no complementar')
-
-    result['AUXILIAR'] = aux_values
-
+    result = pd.DataFrame(rows, columns=result_columns + ['AUXILIAR'])
     return result
 
 
-def merge_data(matera: pd.DataFrame, complementar: pd.DataFrame) -> pd.DataFrame:
+def _build_result(
+    matera: pd.DataFrame,
+    complementar: pd.DataFrame,
+    cr_maxifrota: pd.DataFrame,
+    cr_columns: List[str],
+) -> pd.DataFrame:
     """
-    Realiza merge entre dados Matera e complementares.
-    Matera é FONTE DE VERDADE, seus valores prevalecem.
-    
-    Args:
-        matera: DataFrame da fonte de verdade (Matera)
-        complementar: DataFrame da fonte complementar
-    
-    Returns:
-        DataFrame consolidado
+    Constrói o DataFrame final aplicando as regras de negócio:
+
+    1. Títulos que existem no Matera E nos Títulos em Aberto:
+       → Preenchidos com dados do CR Maxifrota 2026
+
+    2. Títulos que existem APENAS no Matera:
+       → Preenchidos com dados do Matera (layout do CR)
+
+    3. Títulos que existem APENAS nos Títulos em Aberto:
+       → EXCLUÍDOS (não aparecem no resultado)
     """
+    # Merge Matera × Títulos em Aberto (left join) para identificar matches
     merged = matera.merge(
         complementar,
         on='doc_normalized',
         how='left',
         suffixes=('_M', '_C')
     )
-    return merged
+
+    # Determinar quais docs do Matera têm correspondência nos Títulos em Aberto
+    # Se NUM DOC MATERA_C (ou NUM DOC MATERA do complementar) não for nulo, existe match
+    has_match_complementar = pd.Series(False, index=merged.index)
+    for candidate in ['NUM DOC MATERA_C', 'NUM DOC MATERA']:
+        if candidate in merged.columns:
+            col_vals = merged[candidate]
+            has_match_complementar = has_match_complementar | (
+                col_vals.notna() & (col_vals.astype(str).str.strip() != '') & (col_vals.astype(str).str.strip() != 'nan')
+            )
+
+    # Separar índices do Matera em dois grupos
+    indices_com_match = merged.index[has_match_complementar].tolist()
+    indices_sem_match = merged.index[~has_match_complementar].tolist()
+
+    # Obter docs normalizados para busca no CR
+    docs_com_match = merged.loc[indices_com_match, 'doc_normalized'].tolist()
+
+    # Buscar correspondência no CR Maxifrota
+    cr_lookup = cr_maxifrota.set_index('doc_normalized')
+
+    result_parts = []
+
+    # Grupo 1: Títulos com match nos Títulos em Aberto → preencher do CR
+    for doc in docs_com_match:
+        if doc in cr_lookup.index:
+            cr_row = cr_lookup.loc[doc]
+            # Se for DataFrame (docs duplicados), pega a primeira linha
+            if isinstance(cr_row, pd.DataFrame):
+                cr_row = cr_row.iloc[0]
+
+            row = {}
+            for col in cr_columns:
+                if col in cr_row.index:
+                    val = cr_row[col]
+                    row[col] = val if not pd.isna(val) else ''
+                else:
+                    row[col] = ''
+            row['AUXILIAR'] = 'OK - Validado (CR Maxifrota)'
+            result_parts.append(row)
+        else:
+            # Título existe nas duas fontes mas NÃO está no CR → preencher do Matera
+            matera_idx = merged.loc[
+                merged['doc_normalized'] == doc, 'sNumDocumento_M'
+            ].index
+            if len(matera_idx) > 0:
+                # Buscar no Matera original
+                matera_doc = doc
+                matera_match = matera[matera['doc_normalized'] == matera_doc]
+                if len(matera_match) > 0:
+                    idx = matera_match.index[0]
+                    row = {}
+                    for col in cr_columns:
+                        if col in COLUMN_MAPPING:
+                            matera_src = COLUMN_MAPPING[col][0] if len(COLUMN_MAPPING[col]) > 0 else None
+                            if matera_src:
+                                val = _get_column_value(matera, matera_src, idx)
+                                row[col] = val if val is not None else ''
+                            else:
+                                row[col] = ''
+                        else:
+                            row[col] = ''
+                    row['AUXILIAR'] = 'REVISAR - Nos Títulos em Aberto mas NÃO no CR Maxifrota'
+                    result_parts.append(row)
+
+    # Grupo 2: Títulos só no Matera → preencher do Matera
+    df_matera_only = _fill_from_matera(matera, cr_columns, indices_sem_match)
+    if len(df_matera_only) > 0:
+        result_parts.append(df_matera_only)
+
+    # Consolidar resultado
+    if len(result_parts) > 0:
+        result = pd.concat(result_parts, ignore_index=True)
+    else:
+        result = pd.DataFrame(columns=cr_columns + ['AUXILIAR'])
+
+    return result
 
 
 def process_integration(
     matera_path: str,
     complementar_path: str,
-    template_path: str
+    cr_maxifrota_path: str
 ) -> pd.DataFrame:
     """
-    Executa fluxo completo de integração.
-    
+    Executa fluxo completo de integração a partir de caminhos de arquivo.
+
     Args:
-        matera_path: Caminho arquivo Matera
-        complementar_path: Caminho arquivo complementar
-        template_path: Caminho arquivo template Excel
-    
+        matera_path: Caminho arquivo Matera (CSV)
+        complementar_path: Caminho arquivo Títulos em Aberto (CSV)
+        cr_maxifrota_path: Caminho arquivo CR MAXIFROTA 2026 (XLSX)
+
     Returns:
-        DataFrame consolidado com layout final + coluna AUXILIAR
+        DataFrame consolidado no layout do CR + coluna AUXILIAR
     """
     matera = read_matera(matera_path)
     complementar = read_complementar(complementar_path)
-    template = read_template(template_path)
+    cr_maxifrota = read_cr_maxifrota(cr_maxifrota_path)
 
-    merged = merge_data(matera, complementar)
-    result = fill_template(merged, template)
+    # Colunas do layout final = colunas do CR Maxifrota (exceto doc_normalized)
+    cr_columns = [c for c in cr_maxifrota.columns if c != 'doc_normalized']
+
+    result = _build_result(matera, complementar, cr_maxifrota, cr_columns)
 
     return result
 
@@ -264,37 +315,40 @@ def process_integration(
 def process_from_bytes(
     matera_bytes: bytes,
     complementar_bytes: bytes,
-    template_bytes: bytes
+    cr_maxifrota_bytes: bytes
 ) -> pd.DataFrame:
     """
     Executa integração a partir de bytes (para Streamlit).
-    
+
     Args:
         matera_bytes: Conteúdo arquivo Matera em bytes
-        complementar_bytes: Conteúdo arquivo complementar em bytes
-        template_bytes: Conteúdo arquivo template em bytes
-    
+        complementar_bytes: Conteúdo arquivo Títulos em Aberto em bytes
+        cr_maxifrota_bytes: Conteúdo arquivo CR MAXIFROTA 2026 em bytes
+
     Returns:
-        DataFrame consolidado com layout final + coluna AUXILIAR
+        DataFrame consolidado no layout do CR + coluna AUXILIAR
     """
-    # 1. Converter bytes para DataFrames
+    # 1. Ler Matera
     matera = pd.read_csv(io.BytesIO(matera_bytes), sep=';', encoding='iso-8859-1')
     matera = matera.dropna(axis=1, how='all')
     matera['doc_normalized'] = matera['sNumDocumento'].apply(normalize_doc)
 
+    # 2. Ler Títulos em Aberto
     complementar = pd.read_csv(io.BytesIO(complementar_bytes), sep=';', encoding='iso-8859-1')
     complementar.columns = complementar.columns.str.strip()
     complementar = complementar.dropna(axis=1, how='all')
     complementar['doc_normalized'] = complementar['NUM DOC MATERA'].apply(normalize_doc)
 
-    template = pd.read_excel(io.BytesIO(template_bytes))
-    template = template.iloc[0:0].copy()
+    # 3. Ler CR Maxifrota (com dados)
+    cr_maxifrota = pd.read_excel(io.BytesIO(cr_maxifrota_bytes))
+    cr_maxifrota = cr_maxifrota.dropna(axis=1, how='all')
+    cr_maxifrota['doc_normalized'] = cr_maxifrota['NUM DOC'].apply(normalize_doc)
 
-    # 2. Consolidar dados
-    merged = merge_data(matera, complementar)
+    # Colunas do layout final
+    cr_columns = [c for c in cr_maxifrota.columns if c != 'doc_normalized']
 
-    # 3. Preencher template (usa a mesma função que process_integration)
-    result = fill_template(merged, template)
+    # 4. Construir resultado com regras de negócio
+    result = _build_result(matera, complementar, cr_maxifrota, cr_columns)
 
     return result
 
@@ -302,7 +356,7 @@ def process_from_bytes(
 def export_to_excel(df: pd.DataFrame, output_path: str) -> None:
     """
     Exporta DataFrame para arquivo Excel.
-    
+
     Args:
         df: DataFrame a exportar
         output_path: Caminho do arquivo de saída
@@ -313,10 +367,10 @@ def export_to_excel(df: pd.DataFrame, output_path: str) -> None:
 def export_to_bytes(df: pd.DataFrame) -> bytes:
     """
     Exporta DataFrame para bytes (Excel em memória).
-    
+
     Args:
         df: DataFrame a exportar
-    
+
     Returns:
         Bytes do arquivo Excel
     """

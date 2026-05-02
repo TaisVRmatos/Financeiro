@@ -22,7 +22,7 @@ def main():
         **Arquivos esperados:**
         - Titulos em aberto Matera.csv (FONTE DE VERDADE)
         - Título em Aberto.csv (Fonte Complementar)
-        - CR MAXIFROTA 2026.xlsx (Template de Saída)
+        - CR MAXIFROTA 2026.xlsx (Base de Dados Pré-preenchida)
         """
     )
     
