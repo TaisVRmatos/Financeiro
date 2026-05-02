@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Tuple, Optional, Any
+from typing import Tuple, Optional, Any, List
 import io
 
 
@@ -30,13 +30,8 @@ def read_matera(filepath: str) -> pd.DataFrame:
         DataFrame com dados Matera normalizados
     """
     df = pd.read_csv(filepath, sep=';', encoding='iso-8859-1')
-    
-    # Remove colunas vazias
     df = df.dropna(axis=1, how='all')
-    
-    # Normaliza chave de documento
     df['doc_normalized'] = df['sNumDocumento'].apply(normalize_doc)
-    
     return df
 
 
@@ -51,16 +46,9 @@ def read_complementar(filepath: str) -> pd.DataFrame:
         DataFrame com dados complementares normalizados
     """
     df = pd.read_csv(filepath, sep=';', encoding='iso-8859-1')
-    
-    # Remove espaços das colunas e linhas
     df.columns = df.columns.str.strip()
-    
-    # Remove colunas vazias
     df = df.dropna(axis=1, how='all')
-    
-    # Normaliza chave de documento
     df['doc_normalized'] = df['NUM DOC MATERA'].apply(normalize_doc)
-    
     return df
 
 
@@ -75,7 +63,155 @@ def read_template(filepath: str) -> pd.DataFrame:
         DataFrame vazio com colunas do template
     """
     df = pd.read_excel(filepath)
-    return df.iloc[0:0].copy()  # Retorna apenas estrutura vazia
+    return df.iloc[0:0].copy()
+
+
+# ---------------------------------------------------------------------------
+# MAPEAMENTO: coluna do template  ->  [fonte Matera, fonte Complementar]
+# A ordem define prioridade: tenta Matera primeiro, depois Complementar.
+# Coluna vazia (= []) significa que não há mapeamento automático (REVISAR).
+# ---------------------------------------------------------------------------
+COLUMN_MAPPING: dict = {
+    'EMPRESA':                 ['sEmpresa',               'EMPRESA'],
+    'EXECUTIVO':               ['EXECUTIVO',              'EXECUTIVO'],
+    'PRODUTO':                 ['PRODUTO',                'PRODUTO'],
+    'CNPJ':                    ['CNPJ',                   'CNPJ'],
+    'RBASE':                   ['RBASE',                  'RBASE'],
+    'NF':                      ['NR NFEM',                'NR NFEM'],
+    'NUM DOC':                 ['sNumDocumento',          'NUM DOC MATERA'],
+    'CLIENTE':                 ['sCliente',               'NOME CLIENTE'],
+    'CLIENTE 2':               ['sCliente',               'NOME CLIENTE'],
+    'UF':                      ['UF',                     'UF'],
+    'CIDADE':                  ['CIDADE',                 'CIDADE'],
+    'GRUPO':                   ['GRUPO',                  'GRUPO'],
+    'TIPO':                    ['TIPO',                    'TIPO'],
+    'COND PAGTO':              ['COND PAGTO',             'COND PAGTO'],
+    'DT EMISSAO':              ['dtEmissao',              'DT EMISSAO'],
+    'DT VENCIMENTO':           ['dtUltVcto',              'DT VENCIMENTO'],
+    'VLR TITULO':              ['nVlrParcela',            'VLR TITULO'],
+    'VLR SALDO':               ['nVlrPendParcela',        'VLR SALDO'],
+    'IR':                      ['IR RETIDO',              'IR RETIDO'],
+    'ISS':                     ['ISS RETIDO',             'ISS RETIDO'],
+    'LIQUIDO CORRETO':         ['CSLL RETIDO',            'CSLL RETIDO'],
+    'PAGA NA DATA':            ['COFINS',                 'COFINS'],
+    'RISCO DE INADIMPLÊNCIA':  ['PIS',                    'PIS'],
+    'CREDIT SCORE':            ['CREDIT SCORE',           'CREDIT SCORE'],
+    'SCORE CLASS':             [],                                     # sem mapeamento
+    'PROB DEFAULT (%)':        [],                                     # sem mapeamento
+    'TENDÊNCIA':               [],                                     # sem mapeamento
+    'PREVISAO DE PAGAMENTO':   [],                                     # sem mapeamento
+    'BANCO':                   ['sBanco',                 'BANCO'],
+    'DATA BLOQUEIO':           ['DATA BLOQUEIO',          'DATA BLOQUEIO'],
+    'CODIGO PAGAMENTO':        [],                                     # sem mapeamento
+    'ATRASO':                  ['ATRASO',                 'ATRASO'],
+    'LINK NFSE':               ['LINK NFSE',              'LINK NFSE'],
+    'SISTEMA':                 ['SISTEMA',                'SISTEMA'],
+    'RBASE RAIZ':              ['RBASE RAIZ',             'RBASE RAIZ'],
+}
+
+
+def _find_column_value(
+    merged: pd.DataFrame,
+    matera_col: Optional[str],
+    compl_col: Optional[str],
+) -> pd.Series:
+    """
+    Busca valor de uma coluna no DataFrame merged, respeitando prioridade
+    Matera > Complementar > REVISAR, e tratando os sufixos _M / _C
+    gerados pelo merge.
+
+    O DataFrame merged possui colunas renomeadas pelo pandas quando há
+    nomes duplicados entre as duas fontes. Exemplo:
+        - 'EXECUTIVO'  ->  'EXECUTIVO_M' (Matera)  e  'EXECUTIVO_C' (Complementar)
+        - Colunas exclusivas de uma fonte mantêm o nome original.
+
+    Estratégia de busca (por ordem de prioridade):
+      1. nome_M   (coluna vinda do Matera)
+      2. nome     (coluna sem sufixo – exclusiva do Matera ou sem conflito)
+      3. nome_C   (coluna vinda do Complementar)
+    """
+
+    candidates: List[str] = []
+
+    # Prioridade 1: Matera com sufixo _M
+    if matera_col:
+        candidates.append(f"{matera_col}_M")
+        # Prioridade 2: nome original (pode ser exclusivo do Matera)
+        candidates.append(matera_col)
+
+    # Prioridade 3: Complementar com sufixo _C
+    if compl_col:
+        candidates.append(f"{compl_col}_C")
+        # Prioridade 4: nome original do complementar (se diferente do Matera)
+        if compl_col != matera_col:
+            candidates.append(compl_col)
+
+    for candidate in candidates:
+        if candidate in merged.columns:
+            series = merged[candidate].copy()
+            # Converte para string e substitui NaN / NaT por None (depois REVISAR)
+            result = series.astype(str)
+            result = result.replace('nan', None)
+            result = result.replace('NaT', None)
+            result = result.replace('<NA>', None)
+            result = result.fillna('REVISAR')
+            result = result.replace('None', 'REVISAR')
+            return result
+
+    # Fallback: nenhuma coluna encontrada
+    return pd.Series(['REVISAR'] * len(merged), index=merged.index)
+
+
+def fill_template(merged: pd.DataFrame, template: pd.DataFrame) -> pd.DataFrame:
+    """
+    Preenche template com dados consolidados respeitando regra de negócio:
+    - Prioridade: Matera > Complementar > "REVISAR"
+    - Adiciona coluna AUXILIAR sinalizando registros sem match no complementar
+    
+    Args:
+        merged: DataFrame consolidado (resultado do merge)
+        template: DataFrame com estrutura do template
+    
+    Returns:
+        DataFrame preenchido com layout obrigatório + coluna AUXILIAR
+    """
+    result = pd.DataFrame(columns=template.columns)
+
+    # Preenche cada coluna do template usando o mapeamento
+    for col_template in template.columns:
+        if col_template in COLUMN_MAPPING:
+            sources = COLUMN_MAPPING[col_template]
+            matera_src = sources[0] if len(sources) > 0 else None
+            compl_src = sources[1] if len(sources) > 1 else None
+        else:
+            matera_src = None
+            compl_src = None
+
+        result[col_template] = _find_column_value(merged, matera_src, compl_src)
+
+    # Coluna AUXILIAR: sinaliza registros sem correspondência no complementar
+    # Detecta se a coluna de documento do complementar veio vazia (NaN = sem match)
+    aux_values = []
+    for idx in merged.index:
+        row = merged.loc[idx]
+
+        # Tenta achar o campo 'NUM DOC MATERA' no merged (pode ter sufixo _C)
+        doc_compl = None
+        for candidate in ['NUM DOC MATERA_C', 'NUM DOC MATERA']:
+            if candidate in merged.columns:
+                val = row[candidate]
+                if not pd.isna(val) and str(val).strip() != '' and str(val).strip() != 'nan':
+                    doc_compl = val
+                    break
+
+        if doc_compl is not None:
+            aux_values.append('OK - Encontrado nos Títulos em Aberto')
+        else:
+            aux_values.append('REVISAR - Não encontrado no complementar')
+
+    result['AUXILIAR'] = aux_values
+
+    return result
 
 
 def merge_data(matera: pd.DataFrame, complementar: pd.DataFrame) -> pd.DataFrame:
@@ -90,96 +226,13 @@ def merge_data(matera: pd.DataFrame, complementar: pd.DataFrame) -> pd.DataFrame
     Returns:
         DataFrame consolidado
     """
-    # Merge na chave normalizada
     merged = matera.merge(
         complementar,
         on='doc_normalized',
         how='left',
         suffixes=('_M', '_C')
     )
-    
     return merged
-
-
-def fill_template(merged: pd.DataFrame, template: pd.DataFrame) -> pd.DataFrame:
-    """
-    Preenche template com dados consolidados respeitando regra de negócio:
-    - Prioridade: Matera > Complementar > "REVISAR"
-    
-    Args:
-        merged: DataFrame consolidado
-        template: DataFrame com estrutura do template
-    
-    Returns:
-        DataFrame preenchido com layout obrigatório
-    """
-    result = pd.DataFrame(columns=template.columns)
-    
-    for col in template.columns:
-        result[col] = _get_column_value(merged, col)
-    
-    return result
-
-
-def _get_column_value(merged: pd.DataFrame, col: str) -> pd.Series:
-    """
-    Retorna valores para coluna específica do template,
-    aplicando regras de prioridade.
-    
-    Args:
-        merged: DataFrame consolidado
-        col: Nome da coluna do template
-    
-    Returns:
-        Series com valores preenchidos
-    """
-    mapping = {
-        'EMPRESA': ['sEmpresa'],
-        'EXECUTIVO': ['EXECUTIVO'],
-        'PRODUTO': ['PRODUTO'],
-        'CNPJ': ['CNPJ'],
-        'RBASE': ['RBASE'],
-        'NF': ['NR NFEM'],
-        'NUM DOC': ['sNumDocumento'],
-        'CLIENTE': ['sCliente'],
-        'CLIENTE 2': ['NOME CLIENTE'],
-        'UF': ['UF'],
-        'CIDADE': ['CIDADE'],
-        'GRUPO': ['NOME CLIENTE'],
-        'TIPO': ['TIPO'],
-        'COND PAGTO': ['COND PAGTO'],
-        'DT EMISSAO': ['dtEmissao', 'DT EMISSAO'],
-        'DT VENCIMENTO': ['dtUltVcto', 'DT VENCIMENTO'],
-        'VLR TITULO': ['nVlrParcela', 'VLR TITULO'],
-        'VLR SALDO': ['nVlrPendParcela', 'VLR SALDO'],
-        'IR': ['IR RETIDO'],
-        'ISS': ['ISS RETIDO'],
-        'LIQUIDO CORRETO': ['CSLL RETIDO'],
-        'PAGA NA DATA': ['COFINS'],
-        'RISCO DE INADIMPLÊNCIA': ['PIS'],
-        'CREDIT SCORE': ['ATRASO'],
-        'SCORE CLASS': [],
-        'PROB DEFAULT (%)': [],
-        'TENDÊNCIA': [],
-        'PREVISAO DE PAGAMENTO': [],
-        'BANCO': ['sBanco'],
-        'DATA BLOQUEIO': ['DATA BLOQUEIO'],
-        'CODIGO PAGAMENTO': [],
-        'ATRASO': ['ATRASO'],
-        'LINK NFSE': ['LINK NFSE'],
-        'SISTEMA': ['SISTEMA'],
-        'RBASE RAIZ': ['RBASE RAIZ'],
-    }
-    
-    sources = mapping.get(col, [])
-    
-    for source in sources:
-        if source in merged.columns:
-            result = merged[source].fillna('REVISAR').astype(str)
-            return result.replace('nan', 'REVISAR').replace('NaT', 'REVISAR')
-    
-    # Se nenhuma coluna encontrada, retorna "REVISAR"
-    return pd.Series(['REVISAR'] * len(merged), index=merged.index)
 
 
 def process_integration(
@@ -196,19 +249,15 @@ def process_integration(
         template_path: Caminho arquivo template Excel
     
     Returns:
-        DataFrame consolidado com layout final
+        DataFrame consolidado com layout final + coluna AUXILIAR
     """
-    # 1. Ler arquivos
     matera = read_matera(matera_path)
     complementar = read_complementar(complementar_path)
     template = read_template(template_path)
-    
-    # 2. Consolidar dados
+
     merged = merge_data(matera, complementar)
-    
-    # 3. Preencher template
     result = fill_template(merged, template)
-    
+
     return result
 
 
@@ -226,35 +275,27 @@ def process_from_bytes(
         template_bytes: Conteúdo arquivo template em bytes
     
     Returns:
-        DataFrame consolidado com layout final
+        DataFrame consolidado com layout final + coluna AUXILIAR
     """
     # 1. Converter bytes para DataFrames
     matera = pd.read_csv(io.BytesIO(matera_bytes), sep=';', encoding='iso-8859-1')
     matera = matera.dropna(axis=1, how='all')
     matera['doc_normalized'] = matera['sNumDocumento'].apply(normalize_doc)
-    
+
     complementar = pd.read_csv(io.BytesIO(complementar_bytes), sep=';', encoding='iso-8859-1')
     complementar.columns = complementar.columns.str.strip()
     complementar = complementar.dropna(axis=1, how='all')
     complementar['doc_normalized'] = complementar['NUM DOC MATERA'].apply(normalize_doc)
-    
+
     template = pd.read_excel(io.BytesIO(template_bytes))
     template = template.iloc[0:0].copy()
-    
+
     # 2. Consolidar dados
-    merged = matera.merge(
-        complementar,
-        on='doc_normalized',
-        how='left',
-        suffixes=('_M', '_C')
-    )
-    
-    # 3. Preencher template
-    result = pd.DataFrame(columns=template.columns)
-    
-    for col in template.columns:
-        result[col] = _get_column_value(merged, col)
-    
+    merged = merge_data(matera, complementar)
+
+    # 3. Preencher template (usa a mesma função que process_integration)
+    result = fill_template(merged, template)
+
     return result
 
 
