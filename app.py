@@ -4,82 +4,41 @@ import numpy as np
 
 from processor import process_from_bytes, export_to_bytes, sanitize_for_display
 
-# ---------------------------------------------------------------------------
-# Compatibilidade com pandas 3.x (usa PyArrow backend por padrão no pandas 3)
-# Desabilita TODAS as opções future que ativam ArrowDtype
-# ---------------------------------------------------------------------------
-_pandas_major = int(pd.__version__.split(".")[0])
-if _pandas_major >= 3:
-    for opt in ["infer_string", "no_silent_downcasting", "use_arrow_dtype"]:
-        try:
-            if hasattr(pd.options.future, opt):
-                setattr(pd.options.future, opt, False)
-        except Exception:
-            pass
-
 
 def _safe_dataframe_for_display(df: pd.DataFrame) -> pd.DataFrame:
     """
     Prepara DataFrame para exibição Streamlit, com fallback completo.
     Garante que não haja ArrowDtype ou tipos não-suportados.
-    Todas as colunas viram string ou float64 nativo.
     """
     df = sanitize_for_display(df)
-    # Garantia extra: converte TUDO para string (seguro universal)
     try:
-        safe = df.astype(str)
-        return safe
+        return df.astype(str)
     except Exception:
-        pass
-    # Último recurso: constrói DataFrame novo célula por célula
-    data = {}
-    for col in df.columns:
-        try:
-            data[col] = [str(v) if v is not None else "" for v in df[col].tolist()]
-        except Exception:
-            data[col] = [""] * len(df)
-    return pd.DataFrame(data, columns=list(data.keys()))
+        data = {}
+        for col in df.columns:
+            try:
+                data[col] = [str(v) if v is not None else "" for v in df[col].tolist()]
+            except Exception:
+                data[col] = [""] * len(df)
+        return pd.DataFrame(data, columns=list(data.keys()))
 
 
 def _safe_memory_usage(df: pd.DataFrame) -> str:
-    """Calcula uso de memória com segurança para pandas 3.x."""
+    """Calcula uso de memória com segurança."""
     try:
-        mem = df.memory_usage(deep=True).sum() / 1024
+        mem = df.memory_usage(deep=False).sum() / 1024
         return f"{mem:.1f} KB"
     except Exception:
-        try:
-            mem = df.memory_usage(deep=False).sum() / 1024
-            return f"{mem:.1f} KB"
-        except Exception:
-            return "N/D"
+        return "N/D"
 
 
 def _safe_revisar_count(df: pd.DataFrame) -> int:
     """Conta campos 'REVISAR' com segurança."""
     try:
         safe = _safe_dataframe_for_display(df)
-        return (safe == "REVISAR").sum().sum()
+        return int((safe == "REVISAR").sum().sum())
     except Exception:
         return 0
-
-
-def _render_dataframe(df: pd.DataFrame, height: int = 400, full: bool = False):
-    """
-    Renderiza DataFrame no Streamlit com fallback em caso de erro PyArrow.
-    Tenta st.dataframe() primeiro; se falhar, usa st.write().
-    """
-    try:
-        display_df = sanitize_for_display(df.head(10) if not full else df)
-        st.dataframe(display_df, use_container_width=True, height=height)
-    except Exception:
-        try:
-            safe = _safe_dataframe_for_display(df.head(10) if not full else df)
-            st.dataframe(safe, use_container_width=True, height=height)
-        except Exception:
-            try:
-                st.write(df.head(10).to_dict(orient="records") if not full else df.to_dict(orient="records"))
-            except Exception as e:
-                st.error(f"❌ Erro ao renderizar dados: {e}")
 
 
 def main():
@@ -144,49 +103,43 @@ def main():
     if matera_file and complementar_file and template_file:
         st.subheader("⚙️ Processamento")
 
-        col1, col2, col3 = st.columns(3)
+        # Botão sem colunas aninhadas (evita erro removeChild do React)
+        if st.button("🔄 Consolidar Dados", use_container_width=True):
+            try:
+                with st.spinner("Processando arquivos..."):
+                    matera_bytes = matera_file.read()
+                    complementar_bytes = complementar_file.read()
+                    template_bytes = template_file.read()
 
-        with col1:
-            if st.button("🔄 Consolidar Dados", use_container_width=True):
-                try:
-                    with st.spinner("Processando arquivos..."):
-                        # Ler bytes dos arquivos
-                        matera_bytes = matera_file.read()
-                        complementar_bytes = complementar_file.read()
-                        template_bytes = template_file.read()
-
-                        # Processar integração
-                        result_df = process_from_bytes(
-                            matera_bytes, complementar_bytes, template_bytes
-                        )
-
-                        # Sanitizar ANTES de armazenar no session_state (evita erros posteriores)
-                        result_df = sanitize_for_display(result_df)
-
-                        # Armazenar em session_state
-                        st.session_state.result_df = result_df
-
-                        st.success(
-                            f"✅ Consolidação concluída! "
-                            f"{len(result_df)} registros processados."
-                        )
-
-                except ValueError as e:
-                    st.error(str(e))
-                except Exception as e:
-                    st.error(
-                        f"❌ Erro inesperado ao processar os arquivos:\n\n"
-                        f"**{type(e).__name__}:** {str(e)}\n\n"
-                        f"Verifique se:\n"
-                        f"- Os arquivos CSV estão no formato válido (separador ; ou ,)\n"
-                        f"- O arquivo Excel está no formato .xlsx (não .xls)\n"
-                        f"- As colunas obrigatórias estão presentes em cada arquivo"
+                    result_df = process_from_bytes(
+                        matera_bytes, complementar_bytes, template_bytes
                     )
+
+                    # Sanitizar ANTES de armazenar no session_state
+                    result_df = sanitize_for_display(result_df)
+
+                    st.session_state.result_df = result_df
+
+                    st.success(
+                        f"✅ Consolidação concluída! "
+                        f"{len(result_df)} registros processados."
+                    )
+
+            except ValueError as e:
+                st.error(str(e))
+            except Exception as e:
+                st.error(
+                    f"❌ Erro inesperado ao processar os arquivos:\n\n"
+                    f"**{type(e).__name__}:** {str(e)}\n\n"
+                    f"Verifique se:\n"
+                    f"- Os arquivos CSV estão no formato válido (separador ; ou ,)\n"
+                    f"- O arquivo Excel está no formato .xlsx (não .xls)\n"
+                    f"- As colunas obrigatórias estão presentes em cada arquivo"
+                )
 
         # Exibir resultados
         if "result_df" in st.session_state:
             st.divider()
-
             st.subheader("📋 Prévia dos Dados")
 
             # Métricas
@@ -201,15 +154,22 @@ def main():
             with col4:
                 st.metric("Memória", _safe_memory_usage(st.session_state.result_df))
 
-            # Visualizar dados
+            # Visualizar dados (st.table = renderização estática HTML, sem React)
             st.markdown("**Primeiras 10 linhas:**")
-            _render_dataframe(st.session_state.result_df, height=400)
+            try:
+                display_df = _safe_dataframe_for_display(
+                    st.session_state.result_df.head(10)
+                )
+                st.table(display_df)
+            except Exception:
+                st.info("ℹ️ Prévia não disponível neste momento. "
+                        "Faça download do arquivo para visualizar os dados.")
 
             # Download
             st.divider()
             st.subheader("📥 Download")
 
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
 
             with col1:
                 excel_bytes = export_to_bytes(st.session_state.result_df)
@@ -232,10 +192,6 @@ def main():
                     mime="text/csv",
                     use_container_width=True,
                 )
-
-            with col3:
-                if st.checkbox("Mostrar dados detalhados (debug)"):
-                    _render_dataframe(st.session_state.result_df, full=True, height=600)
 
     else:
         st.info("⏳ Carregue os 3 arquivos para iniciar o processamento.")
