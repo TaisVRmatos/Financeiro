@@ -207,6 +207,25 @@ def _collect_all_columns(
     return result
 
 
+def _safe_native(val: Any) -> Any:
+    """Converte valor para tipo nativo Python compatível com PyArrow."""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return str(val)  # bool → string para uniformidade
+    if isinstance(val, (int, float, str)):
+        return val
+    if pd.isna(val):
+        return None
+    # Tenta converter para nativo (trata tipos numpy/pandas)
+    try:
+        if hasattr(val, 'item'):
+            return val.item()
+        return str(val)
+    except Exception:
+        return str(val)
+
+
 def _build_row_from_cr(
     cr_row: pd.Series,
     all_columns: List[str],
@@ -215,7 +234,7 @@ def _build_row_from_cr(
     row = {}
     for col in all_columns:
         if col in cr_row.index:
-            row[col] = cr_row[col]  # preserva tipo original (int/float/str/NaN)
+            row[col] = _safe_native(cr_row[col])
         else:
             row[col] = None
     row['AUXILIAR'] = 'OK - Validado (CR Maxifrota)'
@@ -381,11 +400,45 @@ def _build_result(
     else:
         result = pd.DataFrame(columns=all_columns + ['AUXILIAR'])
 
-    # Converter colunas numéricas para tipo correto (evitar object dtype)
+    # -----------------------------------------------------------------------
+    # Garantir compatibilidade total com PyArrow (pandas 3.x usa ArrowDtype)
+    # Cada coluna DEVE ter um dtype uniforme, sem misturar tipos no object
+    # -----------------------------------------------------------------------
     for col in all_columns:
-        if col in result.columns:
-            # Tenta converter para numérico, ignorando erros
-            result[col] = pd.to_numeric(result[col], errors='ignore')
+        if col not in result.columns:
+            continue
+        series = result[col]
+
+        # Se já é numérico (int64, float64, etc), ok
+        if pd.api.types.is_numeric_dtype(series):
+            continue
+        if pd.api.types.is_datetime64_any_dtype(series):
+            continue
+        if pd.api.types.is_bool_dtype(series):
+            result[col] = series.fillna(False).astype(str)
+            continue
+
+        # Tenta converter para numérico
+        try:
+            numeric = pd.to_numeric(series, errors='raise')
+            result[col] = numeric.astype('float64')
+            continue
+        except (ValueError, TypeError):
+            pass
+
+        # Tenta converter para datetime
+        try:
+            result[col] = pd.to_datetime(series, errors='raise')
+            continue
+        except (ValueError, TypeError):
+            pass
+
+        # Fallback: string uniforme (substitui None → '', tudo str)
+        result[col] = series.fillna('').astype(str)
+
+    # Coluna AUXILIAR sempre string
+    if 'AUXILIAR' in result.columns:
+        result['AUXILIAR'] = result['AUXILIAR'].fillna('').astype(str)
 
     return result
 

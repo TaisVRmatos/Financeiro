@@ -1,22 +1,32 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from processor import process_from_bytes, export_to_bytes, sanitize_for_display
 import io
 
 # ---------------------------------------------------------------------------
-# Compatibilidade com pandas 3.x (usa PyArrow backend por padrão)
-# Força uso do backend NumPy tradicional para evitar "invalid error value"
+# Compatibilidade com pandas 3.x (usa PyArrow backend por padrão no pandas 3)
+# Desabilita TODAS as opções future que ativam ArrowDtype
 # ---------------------------------------------------------------------------
-if hasattr(pd, 'set_option'):
+_pandas_major = int(pd.__version__.split('.')[0])
+if _pandas_major >= 3:
+    # Desabilita infer_string (causa ArrowDtype nas strings)
     try:
-        pd.set_option('future.infer_string', False)  # pandas >= 3.0
+        pd.options.future.infer_string = False
     except Exception:
         pass
-try:
-    # Desabilita o uso do backend Arrow como padrão
-    pd.options.future.infer_string = False
-except Exception:
-    pass
+    # Desabilita silent downcasting
+    try:
+        pd.options.future.no_silent_downcasting = False
+    except Exception:
+        pass
+    # Para qualquer outra opção future que possa causar Arrow
+    for opt in ['infer_string', 'no_silent_downcasting', 'use_arrow_dtype']:
+        try:
+            if hasattr(pd.options.future, opt):
+                setattr(pd.options.future, opt, False)
+        except Exception:
+            pass
 
 
 def main():
