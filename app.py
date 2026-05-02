@@ -3,6 +3,21 @@ import pandas as pd
 from processor import process_from_bytes, export_to_bytes, sanitize_for_display
 import io
 
+# ---------------------------------------------------------------------------
+# Compatibilidade com pandas 3.x (usa PyArrow backend por padrão)
+# Força uso do backend NumPy tradicional para evitar "invalid error value"
+# ---------------------------------------------------------------------------
+if hasattr(pd, 'set_option'):
+    try:
+        pd.set_option('future.infer_string', False)  # pandas >= 3.0
+    except Exception:
+        pass
+try:
+    # Desabilita o uso do backend Arrow como padrão
+    pd.options.future.infer_string = False
+except Exception:
+    pass
+
 
 def main():
     """
