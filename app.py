@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from processor import process_from_bytes, export_to_bytes
+from processor import process_from_bytes, export_to_bytes, sanitize_for_display
 import io
 
 
@@ -130,7 +130,7 @@ def main():
             # Visualizar dados
             st.markdown("**Primeiras 10 linhas:**")
             st.dataframe(
-                st.session_state.result_df.head(10),
+                sanitize_for_display(st.session_state.result_df.head(10)),
                 use_container_width=True,
                 height=400
             )
@@ -169,7 +169,7 @@ def main():
                 # Dados detalhados para debugging
                 if st.checkbox("Mostrar dados detalhados (debug)"):
                     st.dataframe(
-                        st.session_state.result_df,
+                        sanitize_for_display(st.session_state.result_df),
                         use_container_width=True
                     )
     

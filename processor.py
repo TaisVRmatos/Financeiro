@@ -254,6 +254,54 @@ def _build_row_from_matera(
     return row
 
 
+def sanitize_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Garante que todas as colunas tenham tipos compatíveis com PyArrow/Streamlit.
+    - Colunas numéricas → float64 (NaN preenchido com 0)
+    - Colunas de data → datetime64 (NaT preenchido com None)
+    - Demais colunas → string (NaN preenchido com '')
+    """
+    df = df.copy()
+
+    for col in df.columns:
+        series = df[col]
+
+        # Se já é numérico, preenche NaN com 0
+        if pd.api.types.is_numeric_dtype(series):
+            df[col] = series.fillna(0)
+            continue
+
+        # Se já é datetime, mantém
+        if pd.api.types.is_datetime64_any_dtype(series):
+            continue
+
+        # Se é booleano, converte para string
+        if pd.api.types.is_bool_dtype(series):
+            df[col] = series.fillna(False).astype(str)
+            continue
+
+        # Para object e outros: tenta converter para numérico primeiro
+        try:
+            numeric = pd.to_numeric(series, errors='raise')
+            df[col] = numeric.fillna(0).astype('float64')
+            continue
+        except (ValueError, TypeError):
+            pass
+
+        # Tenta converter para datetime
+        try:
+            dt = pd.to_datetime(series, errors='raise')
+            df[col] = dt
+            continue
+        except (ValueError, TypeError):
+            pass
+
+        # Fallback: converte tudo para string, NaN → ''
+        df[col] = series.fillna('').astype(str)
+
+    return df
+
+
 def _build_result(
     matera: pd.DataFrame,
     complementar: pd.DataFrame,
