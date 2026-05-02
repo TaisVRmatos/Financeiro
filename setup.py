@@ -26,9 +26,10 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
-        "streamlit>=1.28.0",
+        "streamlit>=1.40.0",
         "pandas>=2.0.0",
         "openpyxl>=3.10.0",
+        "numpy>=1.26.0",
     ],
     extras_require={
         "dev": [

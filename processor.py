@@ -1,10 +1,10 @@
 import pandas as pd
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 import io
 
 
-def normalize_doc(valor: any) -> Optional[str]:
+def normalize_doc(valor: Any) -> Optional[str]:
     """
     Normaliza número de documento removendo caracteres não numéricos.
     
