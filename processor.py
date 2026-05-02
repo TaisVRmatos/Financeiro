@@ -125,10 +125,9 @@ def _build_row_from_cr(
     row = {}
     for col in all_columns:
         if col in cr_row.index:
-            val = cr_row[col]
-            row[col] = val if not pd.isna(val) else ''
+            row[col] = cr_row[col]  # preserva tipo original (int/float/str/NaN)
         else:
-            row[col] = ''
+            row[col] = None
     row['AUXILIAR'] = 'OK - Validado (CR Maxifrota)'
     return row
 
@@ -153,16 +152,14 @@ def _build_row_from_matera(
             matera_src = COLUMN_MAPPING[col][0] if len(COLUMN_MAPPING[col]) > 0 else None
             if matera_src:
                 val = _get_column_value(matera, matera_src, idx)
-                row[col] = val if val is not None else ''
+                row[col] = val  # preserva tipo original (None = NaN)
             else:
-                # Coluna existe no mapeamento mas sem fonte Matera
-                row[col] = ''
+                row[col] = None
         elif col in matera.columns:
-            # Coluna exclusiva do Matera (não mapeada)
             val = _get_column_value(matera, col, idx)
-            row[col] = val if val is not None else ''
+            row[col] = val  # preserva tipo original
         else:
-            row[col] = ''
+            row[col] = None
     row['AUXILIAR'] = auxiliar_msg
     return row
 
@@ -245,6 +242,12 @@ def _build_result(
         result = pd.DataFrame(result_rows, columns=all_columns + ['AUXILIAR'])
     else:
         result = pd.DataFrame(columns=all_columns + ['AUXILIAR'])
+
+    # Converter colunas numéricas para tipo correto (evitar object dtype)
+    for col in all_columns:
+        if col in result.columns:
+            # Tenta converter para numérico, ignorando erros
+            result[col] = pd.to_numeric(result[col], errors='ignore')
 
     return result
 
