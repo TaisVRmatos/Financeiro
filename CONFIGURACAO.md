@@ -1,381 +1,181 @@
-# 🚀 GUIA DE INSTALAÇÃO E DEPLOYMENT
+# ⚙️ Guia de Configuração — Integrador Financeiro
 
-## Instalação Local
-
-### 1. Clone o repositório
-```bash
-git clone https://github.com/seu-usuario/integrador-financeiro.git
-cd integrador-financeiro
-```
-
-### 2. Crie ambiente virtual
-```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
-
-# Mac/Linux
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 3. Instale dependências
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Execute a aplicação Streamlit
-```bash
-streamlit run app.py
-```
-
-A aplicação abrirá em `http://localhost:8501`
+Guia completo para configurar, customizar e fazer deploy do Integrador Financeiro no **Render.com**.
 
 ---
 
-## Deploy no Streamlit Cloud
+## 📦 1. Deploy no Render.com
 
-### 1. Push para GitHub
-```bash
-git add .
-git commit -m "Initial commit"
-git push origin main
-```
+### Pré-requisitos
 
-### 2. Acesse Streamlit Cloud
-- Vá para https://share.streamlit.io
-- Faça login com sua conta GitHub
-- Clique "New app"
-- Configure:
-  - **Repository**: seu-usuario/integrador-financeiro
-  - **Branch**: main
-  - **Main file path**: app.py
+- Conta no [Render.com](https://render.com) (plano gratuito)
+- Repositório Git hospedado (GitHub recomendado)
+- Docker (para testes locais)
 
-### 3. Deploy
-Clique "Deploy" e aguarde ~2 minutos
+### Opção A: Blueprint (render.yaml)
 
----
+O arquivo `render.yaml` na raiz do projeto permite deploy com 1 clique:
 
-## Deploy na AWS (EC2)
+1. No dashboard do Render, clique em **New +** → **Blueprint**
+2. Conecte o repositório
+3. O Render detecta automaticamente o `render.yaml` e cria o serviço
 
-### 1. Conecte à instância
-```bash
-ssh -i seu-arquivo.pem ec2-user@seu-ec2-public-ip
-```
+### Opção B: Deploy Manual
 
-### 2. Instale Python e Git
-```bash
-sudo yum update
-sudo yum install python3 python3-pip git
-```
+1. **New +** → **Web Service**
+2. Conecte o repositório
+3. Configure:
+   - **Name**: `integrador-financeiro`
+   - **Region**: `Oregon (US West)` — mais próxima do Brasil
+   - **Runtime**: `Docker`
+   - **Instance Type**: `Free`
+4. Variáveis de ambiente (opcionais):
+   - `PORT`: Gerenciada automaticamente pelo Render
+   - `STREAMLIT_SERVER_ENABLE_CORS`: `false`
+   - `STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION`: `false`
+5. Clique em **Create Web Service**
 
-### 3. Clone e configure
-```bash
-git clone https://github.com/seu-usuario/integrador-financeiro.git
-cd integrador-financeiro
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
+### Primeiro Deploy
 
-### 4. Execute com Gunicorn (produção)
-```bash
-pip install gunicorn
-gunicorn -w 4 -b 0.0.0.0:8000 "streamlit.web.cli:main" -- run app.py --logger.level=error
-```
-
-### 5. Configure Nginx como reverse proxy
-```bash
-sudo yum install nginx
-sudo systemctl start nginx
-```
-
-Adicione em `/etc/nginx/conf.d/streamlit.conf`:
-```nginx
-server {
-    listen 80;
-    server_name seu-dominio.com;
-
-    location / {
-        proxy_pass http://localhost:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-```bash
-sudo systemctl reload nginx
-```
+- O build inicial leva **3-5 minutos**
+- Após o deploy, o Render fornece uma URL pública: `https://integrador-financeiro.onrender.com`
+- **Atenção**: No plano gratuito, o serviço hiberna após 15 minutos de inatividade. O primeiro acesso após hibernação pode levar 30-60 segundos.
 
 ---
 
-## Deploy no Heroku
+## 🐳 2. Configuração Docker
 
-### 1. Instale Heroku CLI
-```bash
-# https://devcenter.heroku.com/articles/heroku-cli
-```
+### Dockerfile
 
-### 2. Crie arquivo `Procfile`
-```
-web: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-```
+O Dockerfile já está configurado com todas as otimizações necessárias:
 
-### 3. Faça login e deploy
-```bash
-heroku login
-heroku create seu-app-name
-git push heroku main
-```
-
----
-
-## Docker
-
-### 1. Crie `Dockerfile`
 ```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-COPY . .
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+FROM python:3.11-slim
+# Multi-stage build otimizado para Render
 ```
 
-### 2. Build e run
+### Build Local
+
 ```bash
 docker build -t integrador-financeiro .
 docker run -p 8501:8501 integrador-financeiro
 ```
 
-### 3. Push para Docker Hub
-```bash
-docker tag integrador-financeiro:latest seu-usuario/integrador-financeiro:latest
-docker push seu-usuario/integrador-financeiro:latest
-```
-
 ---
 
-## Testando Localmente
+## 🎨 3. Configuração Streamlit
 
-### Teste rápido do processador
-```bash
-python3 << 'EOF'
-from processor import process_integration, export_to_excel
+### .streamlit/config.toml
 
-result = process_integration(
-    'Titulos_em_aberto_Matera.csv',
-    'Título_em_Aberto.csv',
-    'CR_MAXIFROTA_2026.xlsx'
-)
-
-export_to_excel(result, 'output.xlsx')
-print(f"✅ {len(result)} registros processados")
-EOF
-```
-
-### Teste do Streamlit
-```bash
-streamlit run app.py
-# Abra http://localhost:8501
-# Carregue os arquivos
-# Clique em "Consolidar Dados"
-# Baixe o resultado
-```
-
----
-
-## Troubleshooting
-
-### Erro: "ModuleNotFoundError: No module named 'streamlit'"
-```bash
-pip install -r requirements.txt
-```
-
-### Erro: "UnicodeDecodeError"
-Os arquivos CSV usam encoding `iso-8859-1`. Se tiver problemas:
-```bash
-# Converter para UTF-8
-iconv -f ISO-8859-1 -t UTF-8 input.csv -o output.csv
-```
-
-### Porta 8501 já em uso
-```bash
-streamlit run app.py --server.port=8502
-```
-
-### Aumentar timeout de upload
-Edite `~/.streamlit/config.toml`:
 ```toml
-[client]
-maxUploadSize = 100
-
 [server]
-maxUploadSize = 100
+port = 8501
+maxUploadSize = 200
+enableCORS = false
+enableXsrfProtection = false
+headless = true
+
+[browser]
+serverAddress = "0.0.0.0"
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#2563eb"
+backgroundColor = "#f0f4f8"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1e293b"
+font = "sans serif"
 ```
+
+### Porta Dinâmica no Render
+
+O Render injeta a variável `$PORT` automaticamente. O `CMD` do Dockerfile lê essa variável:
+
+```dockerfile
+CMD streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+```
+
+Para testes locais, a porta padrão é `8501`.
 
 ---
 
-## Variáveis de Ambiente (Produção)
+## 📊 4. Configuração do Processamento
 
-Crie `.streamlit/secrets.toml`:
-```toml
-[database]
-username = "seu_usuario"
-password = "sua_senha"
+### Arquivos de Entrada
 
-[credentials]
-api_key = "sua_chave_api"
-```
+| Fonte | Formato | Coluna Chave | Encoding Esperado |
+|-------|---------|--------------|-------------------|
+| Matera | CSV | `sNumDocumento` | UTF-8 / Latin1 |
+| Títulos em Aberto | CSV | `NUM DOC MATERA` | UTF-8 / Latin1 |
+| CR Maxifrota | XLSX | `NUM DOC` | N/A |
 
-Acesse em `app.py`:
-```python
-import streamlit as st
-db_username = st.secrets["database"]["username"]
-```
+### Tamanho Máximo de Upload
+
+- **Padrão**: 200 MB (configurável em `.streamlit/config.toml`)
+- **Plano Free Render**: Limite de memória 512 MB — mantenha arquivos abaixo de 100 MB
 
 ---
 
-## GitHub Actions CI/CD
+## 🔧 5. Variáveis de Ambiente
 
-O repositório já inclui `.github/workflows/tests.yml` que executa:
-- Linting com flake8
-- Verificação de imports
-- Testes com múltiplas versões Python
-
-Os testes rodam automaticamente em cada `push` e `pull_request`.
+| Variável | Descrição | Padrão | Obrigatória |
+|----------|-----------|--------|-------------|
+| `PORT` | Porta do servidor (Render injeta automaticamente) | `8501` | Não |
+| `STREAMLIT_SERVER_ENABLE_CORS` | CORS | `false` | Não |
+| `STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION` | XSRF | `false` | Não |
 
 ---
 
-## Performance e Otimizações
+## 🚨 6. Troubleshooting
 
-### Cachear operações
-```python
-@st.cache_data
-def read_data(filepath):
-    return pd.read_csv(filepath)
-```
+### "Application failed to respond"
 
-### Limpar memória
+- Verifique se a aplicação está escutando na porta `$PORT`
+- O Render espera resposta HTTP na porta dentro de 3 minutos após o build
+- Veja os logs no dashboard do Render: **Logs** tab
+
+### "File upload não funciona"
+
+- Verifique `maxUploadSize` no `config.toml`
+- Arquivos grandes podem exceder a memória do plano Free (512 MB)
+- O bug do `st.form` com `st.file_uploader` foi corrigido — não use forms para upload
+
+### Erro de processamento
+
+- Verifique se as colunas obrigatórias estão presentes nos arquivos
+- Confira o encoding dos CSVs (UTF-8 ou Latin1)
+- Use a seção **Informações de Diagnóstico** na interface para detalhes
+
+---
+
+## 📈 7. Monitoramento
+
+- **Render Dashboard**: Métricas de CPU, memória e banda
+- **Logs**: Acessíveis via dashboard Render → seu serviço → **Logs**
+- **Health Check**: Render verifica a rota `/healthz` a cada 30 segundos
+
+---
+
+## 🔄 8. CI/CD
+
+### Deploy Automático (GitHub + Render)
+
+1. No Render, ao conectar o repositório, ative **Auto Deploy**
+2. Commits na branch principal (geralmente `main`) disparam deploy automaticamente
+3. Builds subsequentes usam cache Docker para acelerar
+
+### Webhook Manual
+
 ```bash
-# Remover dados temporários
-rm -f *.xlsx *.csv __pycache__/*
-```
-
-### Monitorar uso de memória
-```bash
-# Python
-import psutil
-print(f"Memória: {psutil.Process().memory_info().rss / 1024 / 1024:.1f} MB")
-
-# Sistema
-free -h
-top -n 1 | grep "Mem:"
+curl -X POST "https://api.render.com/deploy/srv-xxxxx?key=YOUR_DEPLOY_KEY"
 ```
 
 ---
 
-## Segurança em Produção
+## 📞 Suporte
 
-### 1. HTTPS obrigatório
-```bash
-# Usar Let's Encrypt com Certbot
-sudo certbot certonly --standalone -d seu-dominio.com
-```
-
-### 2. Rate limiting no Nginx
-```nginx
-limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
-
-location / {
-    limit_req zone=api burst=20 nodelay;
-    proxy_pass http://localhost:8000;
-}
-```
-
-### 3. Validação de uploads
-- Limite tamanho máximo de arquivo
-- Validar extensão (.csv, .xlsx)
-- Escanear malware (ClamAV)
-
-### 4. Rotação de logs
-```bash
-# /etc/logrotate.d/streamlit
-/var/log/streamlit/*.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    notifempty
-}
-```
+Para problemas técnicos, abra uma issue no repositório ou contate a equipe de TI.
 
 ---
 
-## Monitoramento
-
-### Sentry (Error Tracking)
-```bash
-pip install sentry-sdk
-```
-
-```python
-import sentry_sdk
-
-sentry_sdk.init(
-    dsn="https://sua-dsn@sentry.io/seu-project-id",
-    traces_sample_rate=1.0
-)
-```
-
-### Prometheus + Grafana (Métricas)
-```python
-from prometheus_client import Counter, Histogram
-
-consolidation_counter = Counter(
-    'consolidations_total',
-    'Total de consolidações'
-)
-
-processing_time = Histogram(
-    'processing_seconds',
-    'Tempo de processamento'
-)
-```
-
----
-
-## Versionamento
-
-Ao fazer alterações, atualize `__version__`:
-
-```python
-# No início de app.py
-__version__ = "1.0.0"
-st.write(f"v{__version__}")
-```
-
-Tag releases:
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
----
-
-## Suporte
-
-Para dúvidas:
-1. Abra uma [Issue](https://github.com/seu-usuario/integrador-financeiro/issues)
-2. Consulte a [Discussão](https://github.com/seu-usuario/integrador-financeiro/discussions)
-3. Envie um [Pull Request](https://github.com/seu-usuario/integrador-financeiro/pulls)
-
----
-
-**Última atualização:** 2024
+© 2026 Integrador Financeiro

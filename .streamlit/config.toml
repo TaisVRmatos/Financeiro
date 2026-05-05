@@ -1,18 +1,22 @@
-[theme]
-primaryColor = "#2E86C1"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
-textColor = "#262730"
-font = "sans serif"
-
 [server]
-maxUploadSize = 100
-enableXsrfProtection = true
-enableCORS = true
+# Configuração para Render - porta dinâmica
+port = 8501
+address = "0.0.0.0"
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+runOnSave = false
 
 [browser]
 gatherUsageStats = false
 
 [logger]
-level = "info"
-messageFormat = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+level = "error"
+
+[theme]
+base = "light"
+primaryColor = "#1a3a5c"
+backgroundColor = "#f5f7fa"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1e293b"
+font = "sans serif"
